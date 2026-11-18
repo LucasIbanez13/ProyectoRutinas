@@ -4,14 +4,16 @@ App web para seguir rutinas de gimnasio desde el celular o la compu. Es un únic
 
 ## Funciones
 
-- **Rutina con el formato del Word**: días con encabezado, tabla Ejercicio / Series × Reps / Descanso y ejercicios básicos resaltados.
-- **Cargar rutinas**: subí un Word (.docx) o un .txt, o pegá el texto; la app detecta días y ejercicios.
-- **Marcar como hecho** cada serie y cada ejercicio, con el avance del día.
-- **Cronómetro por ejercicio** y **temporizador de descanso** automático (suena y vibra al terminar).
-- **Registro de pesos**: kg y repeticiones por serie, "última vez" de la semana anterior y sugerencia de subir peso.
+- **Pensada para celular**: barra de pestañas abajo, botones grandes y +/− para cargar kilos y repeticiones.
+- **Varias personas, una rutina**: cada persona tiene su color, su semana y sus propios pesos, tiempos y descansos. Se cambia de persona con un toque arriba (ideal para entrenar de a dos con un solo celular).
+- **Entrada en calor con cardio**: bicicleta, caminadora, elíptico o escaladora, con temporizador de 5 a 15 minutos.
 - **Precalentamiento por ejercicio**: movilidad específica y series de aproximación con los kilos calculados.
+- **Marcar como hecho** cada serie y cada ejercicio; al terminar uno se abre el siguiente.
+- **Cronómetro por ejercicio** y **descanso automático** por persona (suena y vibra al terminar).
+- **Registro de pesos**: "última vez" de la semana anterior, sugerencia de subir peso e historial por persona.
+- **Cargar rutinas** desde Word (.docx), .txt o texto pegado.
 - **Bloque de fuerza** opcional desde la semana 5 (primer básico a 4 × 4-6).
-- **Planilla semanal** que se completa sola y **copia de seguridad** en JSON.
+- Mantiene la pantalla encendida mientras entrenás y permite **copias de seguridad** en JSON.
 
 ## Uso
 
