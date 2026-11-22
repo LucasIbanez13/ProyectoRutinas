@@ -19,7 +19,20 @@ App web para seguir rutinas de gimnasio desde el celular o la compu. Es un únic
 
 Abrí `index.html` en el navegador, o activá GitHub Pages (Settings → Pages → rama `main`) para usarla desde el celular.
 
-Los datos se guardan en el navegador (localStorage). Para pasarlos a otro dispositivo usá "Descargar copia" y "Restaurar copia" en la pestaña Rutina.
+Los datos se guardan en el navegador (localStorage). Para pasarlos a otro dispositivo usá "Descargar copia" y "Restaurar copia" en la pestaña Personas.
+
+### Nube (Supabase) y Progreso Gym
+
+En **Personas → Cuenta y nube** podés iniciar sesión con la misma cuenta de
+[Progreso Gym](https://github.com/LucasIbanez13/proyecto-llevar-peso). Al estar conectado:
+
+- Todo (personas, semanas, pesos, rutina) se guarda en la nube y se sincroniza entre dispositivos.
+- Los pesos de la persona elegida en **"Mis pesos son los de"** se copian al historial de Progreso Gym
+  (tabla `workout_sets`), donde se calculan 1RM, progresión y proyección semanal.
+- **Enviar rutina a Progreso Gym** reemplaza los días y ejercicios de esa app por los de esta.
+
+Requiere haber ejecutado `supabase/schema.sql` y `supabase/02_conexion_proyecto_rutinas.sql`
+del repositorio de Progreso Gym. La URL y la clave *publishable* de Supabase están al principio del `<script>`.
 
 ### Formato de texto aceptado
 

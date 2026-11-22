@@ -216,9 +216,9 @@ textarea.rt{width:100%;border:1px solid var(--line-2);border-radius:12px;padding
 .sheet .in{background:var(--card);width:100%;max-width:640px;border-radius:22px 22px 0 0;padding:20px 16px calc(20px + env(safe-area-inset-bottom));max-height:90vh;overflow:auto}
 .sheet h2{margin:0 0 4px;font-size:22px}
 .sheet p{margin:0 0 14px;color:var(--muted);font-size:15px}
-.sheet .fld{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+.sheet .fld,.card .fld{display:flex;gap:8px;align-items:center;margin-bottom:8px}
 .sheet .fld i{width:36px;height:36px;border-radius:50%;background:var(--c);flex:none}
-.sheet .fld input{flex:1;min-width:0;border:1px solid var(--line-2);border-radius:12px;padding:12px;background:var(--card);font-size:16px}
+.sheet .fld input,.card .fld input{flex:1;min-width:0;border:1px solid var(--line-2);border-radius:12px;padding:12px;background:var(--card);font-size:16px}
 .toast{position:fixed;left:50%;top:calc(70px + env(safe-area-inset-top));transform:translate(-50%,-20px);opacity:0;z-index:60;background:var(--head);color:var(--head-ink);padding:10px 16px;border-radius:99px;font-weight:600;font-size:14px;transition:.25s;pointer-events:none;max-width:calc(100% - 32px);text-align:center}
 .toast.show{opacity:1;transform:translate(-50%,0)}
 </style>
@@ -390,7 +390,9 @@ let S = null;
 try { S = JSON.parse(localStorage.getItem(KEY)); } catch (e) {}
 if (!S || !S.routine) S = freshState();
 S.cd = S.cd || {}; S.open = S.open || {}; S.timers = S.timers || {};
-function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
+function save() { S.updatedAt = Date.now(); try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} cloudQueue(); }
+const today = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+const stamp = L => { if (!L.date) L.date = today(); };   // fecha real del entrenamiento (para Progreso Gym)
 const P = () => S.profiles.find(p => p.id === S.pid) || S.profiles[0];
 const prof = id => S.profiles.find(p => p.id === id);
 const initial = n => (n || '?').trim().charAt(0).toUpperCase();
@@ -552,6 +554,128 @@ setInterval(tick, 500);
 let toastT;
 function toast(t) { const el = $('#toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('show'), 2200); }
 
+/* ---------- nube (Supabase, compartida con Progreso Gym) ---------- */
+// La clave "publishable" es pública por diseño: la seguridad la dan las políticas RLS de la base.
+const SB_URL = 'https://zytxscuaimonyikxspur.supabase.co';
+const SB_KEY = 'sb_publishable_vXFHef1T8r2bBZF1wLLLEw_zmI-f3lv';
+const SYNC_KEY = 'rutina-gym-synced';
+const cloud = { sb: null, user: null, status: 'off', err: '', pushT: null, busy: false };
+
+function loadSupabase() {
+  if (window.supabase) return Promise.resolve();
+  return new Promise((ok, fail) => { const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js'; s.onload = ok;
+    s.onerror = () => fail(new Error('Sin conexión')); document.head.appendChild(s); });
+}
+function cloudSet(status, err = '') { cloud.status = status; cloud.err = err; const el = $('#cloudst'); if (el) el.innerHTML = cloudStatusHTML(); }
+function cloudStatusHTML() {
+  return { off: 'Sin conectar', sync: '⟳ Sincronizando…', ok: '✓ Sincronizado', offline: 'Sin conexión: se guarda en el celular', error: '⚠ ' + esc(cloud.err) }[cloud.status] || '';
+}
+async function cloudInit() {
+  try { await loadSupabase(); } catch (e) { cloudSet('offline'); return; }
+  cloud.sb = window.supabase.createClient(SB_URL, SB_KEY);
+  cloud.sb.auth.onAuthStateChange((ev, session) => {
+    const u = session ? session.user : null, changed = (u && u.id) !== (cloud.user && cloud.user.id);
+    cloud.user = u;
+    if (!changed) return;
+    if (u) setTimeout(cloudPull, 0); else cloudSet('off');
+    if (S.tab === 'cfg' && !$('.sheet')) render();
+  });
+}
+/** Trae el estado de la nube si es más nuevo; si no, sube el local. */
+async function cloudPull() {
+  if (!cloud.user) return;
+  cloudSet('sync');
+  const { data, error } = await cloud.sb.from('rutinas_app_state').select('data, updated_at').maybeSingle();
+  if (error) return cloudSet('error', error.message);
+  const remoteT = data ? new Date(data.updated_at).getTime() : 0;
+  const localEmpty = !Object.keys(S.logs || {}).length;
+  if (data && data.data && data.data.routine && (remoteT > (S.updatedAt || 0) || localEmpty)) {
+    const keep = { cd: S.cd, timers: S.timers, open: S.open, tab: S.tab };
+    S = Object.assign(freshState(), data.data, keep); S.updatedAt = remoteT;
+    try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {}
+    closeSheet(); render(); toast('Datos traídos de la nube ☁');
+  }
+  await cloudPush();
+}
+function cloudQueue() { if (!cloud.user) return; clearTimeout(cloud.pushT); cloud.pushT = setTimeout(cloudPush, 2500); }
+async function cloudPush() {
+  if (!cloud.user || cloud.busy) return cloudQueue();
+  cloud.busy = true; cloudSet('sync');
+  try {
+    const { cd, open, timers, ...data } = S;
+    const r = await cloud.sb.from('rutinas_app_state').upsert({ user_id: cloud.user.id, data, updated_at: new Date(S.updatedAt || Date.now()).toISOString() });
+    if (r.error) throw r.error;
+    await syncSets();
+    cloudSet('ok');
+  } catch (e) { cloudSet('error', e.message || String(e)); }
+  cloud.busy = false;
+}
+/** Persona cuyos pesos se mandan al historial de Progreso Gym. */
+const cloudPerson = () => prof(S.cloudPid) || S.profiles[0];
+/** Pasa las series de "tu" persona a la tabla workout_sets (solo lo que cambió). */
+async function syncSets() {
+  const p = cloudPerson(); if (!p) return;
+  let synced = {}; try { synced = JSON.parse(localStorage.getItem(SYNC_KEY)) || {}; } catch (e) {}
+  const now = {};
+  for (const key in S.logs) {
+    const [pid, w, dId, eId] = key.split('|');
+    if (pid !== p.id || eId === '_gen') continue;
+    const day = S.routine.days.find(d => d.id === dId), ex = day && day.exercises.find(e => e.id === eId);
+    if (!ex) continue;
+    const L = S.logs[key];
+    const rows = filled(L).map(s => ({ kg: num(s.kg) ?? 0, reps: parseInt(s.reps, 10) || 0 })).filter(s => s.reps > 0);
+    // registros viejos sin fecha: se estima por la semana (7 días por semana hacia atrás)
+    const date = L.date || new Date(Date.parse(today()) - (p.week - +w) * 7 * 86400000).toISOString().slice(0, 10);
+    now[key] = JSON.stringify([ex.name, date, rows]);
+    if (synced[key] === now[key]) continue;
+    const del = await cloud.sb.from('workout_sets').delete().eq('source_key', key);
+    if (del.error) throw del.error;
+    if (rows.length) {
+      const ins = await cloud.sb.from('workout_sets').insert(rows.map((s, i) => ({
+        exercise_name: ex.name, date, set_number: i + 1, weight_kg: s.kg, reps: s.reps, source_key: key })));
+      if (ins.error) throw ins.error;
+    }
+    synced[key] = now[key];
+    try { localStorage.setItem(SYNC_KEY, JSON.stringify(synced)); } catch (e) {}
+  }
+  for (const key in synced) if (!(key in now)) {   // registros borrados en la app
+    await cloud.sb.from('workout_sets').delete().eq('source_key', key);
+    delete synced[key];
+  }
+  try { localStorage.setItem(SYNC_KEY, JSON.stringify(synced)); } catch (e) {}
+}
+/** Reemplaza la rutina de Progreso Gym por la de esta app. */
+async function pushRoutine() {
+  const sb = cloud.sb, uid = cloud.user.id;
+  const del = await sb.from('routine_days').delete().eq('user_id', uid);
+  if (del.error) throw del.error;
+  for (const [i, d] of S.routine.days.entries()) {
+    const r = await sb.from('routine_days').insert({ name: `${d.label} · ${d.name}`, day_order: i }).select().single();
+    if (r.error) throw r.error;
+    const rows = d.exercises.map((e, j) => { const [a, b] = e.reps.split(/[-–]/).map(Number);
+      return { day_id: r.data.id, name: e.name, sets: e.sets, rep_min: a, rep_max: b || a, mode: b && b !== a ? 'rango' : 'fijas',
+        increment_kg: isLeg(e) ? 5 : 2.5, target_rir: 2, rest_sec: e.restSec, ex_order: j, notes: e.type }; });
+    const x = await sb.from('routine_exercises').insert(rows);
+    if (x.error) throw x.error;
+  }
+}
+function loginForm() {
+  return `<div class="fld"><input id="lgmail" type="email" placeholder="Email" autocomplete="email"></div>
+    <div class="fld"><input id="lgpass" type="password" placeholder="Contraseña (mín. 6)" autocomplete="current-password"></div>
+    <div class="btns"><button class="btn sm" data-a="login">Entrar</button><button class="btn ghost sm" data-a="signup">Crear cuenta</button></div>
+    <p class="hint" id="lgmsg">Es la misma cuenta que usás en Progreso Gym.</p>`;
+}
+async function doLogin(signup) {
+  const email = $('#lgmail').value.trim(), password = $('#lgpass').value, msg = $('#lgmsg');
+  if (!cloud.sb) { msg.textContent = 'No hay conexión con la nube.'; return; }
+  msg.textContent = 'Conectando…';
+  const r = signup ? await cloud.sb.auth.signUp({ email, password }) : await cloud.sb.auth.signInWithPassword({ email, password });
+  if (r.error) { msg.textContent = r.error.message === 'Invalid login credentials' ? 'Email o contraseña incorrectos.' : r.error.message; return; }
+  if (signup && !r.data.session) { msg.textContent = 'Cuenta creada. Confirmá el email y después entrá.'; return; }
+  toast('Sesión iniciada ☁'); closeSheet(); render();
+}
+
 /* ---------- vistas ---------- */
 function renderPeople() {
   $('#people').innerHTML = S.profiles.map(p => `<button class="pp ${p.id === S.pid ? 'on' : ''}" style="--c:${p.color}" data-a="who" data-v="${p.id}"><i>${esc(initial(p.name))}</i><span>${esc(p.name)}</span></button>`).join('')
@@ -690,7 +814,15 @@ function renderCfg() {
     <label class="opt"><span>Bloque de fuerza<br><small style="color:var(--muted)">1er básico del día a 4 × 4-6</small></span><input type="checkbox" data-set="strOn" ${S.strength.on ? 'checked' : ''}></label>
     <label class="opt"><span>Desde la semana</span><input type="number" min="1" max="52" data-set="strFrom" value="${S.strength.from}"></label>
     <label class="opt"><span>Mantener la pantalla encendida</span><input type="checkbox" data-set="awake" ${S.keepAwake ? 'checked' : ''}></label></section>
-  <section class="card"><h3>Tus datos</h3><p>Todo se guarda en este celular. Hacé una copia de vez en cuando para no perder los pesos.</p>
+  <section class="card"><h3>☁ Cuenta y nube</h3>
+    ${cloud.user ? `<p>Conectado como <b>${esc(cloud.user.email)}</b> · <span id="cloudst">${cloudStatusHTML()}</span></p>
+      <label class="opt"><span>Mis pesos son los de<br><small style="color:var(--muted)">Se pasan al historial de Progreso Gym</small></span>
+        <select data-set="cloudPid" style="border:1px solid var(--line-2);border-radius:10px;padding:8px;background:var(--card)">${S.profiles.map(p => `<option value="${p.id}" ${p.id === cloudPerson().id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+      <div class="btns"><button class="btn ghost sm" data-a="syncnow">Sincronizar ahora</button>
+        <button class="btn ghost sm" data-a="pushrt">Enviar rutina a Progreso Gym</button>
+        <button class="btn danger sm" data-a="logout">Cerrar sesión</button></div>`
+    : `<p>Iniciá sesión para guardar todo en la nube, usarlo en varios dispositivos y ver tu progreso en Progreso Gym. <span id="cloudst">${cloud.status === 'offline' ? cloudStatusHTML() : ''}</span></p>${loginForm()}`}</section>
+  <section class="card"><h3>Tus datos</h3><p>${cloud.user ? 'Se guarda en el celular y en la nube.' : 'Todo se guarda en este celular. Hacé una copia de vez en cuando para no perder los pesos.'}</p>
     <div class="btns"><button class="btn ghost sm" data-a="export">Descargar copia</button>
     <label class="btn ghost sm" style="cursor:pointer">Restaurar copia<input type="file" accept=".json" data-file="backup" hidden></label>
     <button class="btn danger sm" data-a="wipe">Borrar registros de ${esc(P().name)}</button></div></section>`;
@@ -710,7 +842,8 @@ function renderPeople0() {
   openSheet(`<h2>¿Quiénes entrenan? 💪</h2><p>Comparten la misma rutina y cada uno guarda sus pesos. Podés agregar más después.</p>
     <div id="fl">${[0, 1].map(i => `<div class="fld" style="--c:${COLORS[i]}"><i></i><input placeholder="Persona ${i + 1}${i ? ' (opcional)' : ''}" maxlength="20"></div>`).join('')}</div>
     <button class="btn ghost wide sm" data-a="flmore" style="margin-top:0">+ Otra persona</button>
-    <button class="btn wide" data-a="flok">Empezar</button>`);
+    <button class="btn wide" data-a="flok">Empezar</button>
+    <button class="btn ghost wide sm" data-a="loginsheet">☁ Ya tengo cuenta: iniciar sesión</button>`);
 }
 function openSheet(html) { $('#sheet').innerHTML = `<div class="sheet"><div class="in">${html}</div></div>`; const i = $('#sheet input'); if (i) setTimeout(() => i.focus(), 50); }
 function closeSheet() { $('#sheet').innerHTML = ''; }
@@ -748,7 +881,14 @@ document.addEventListener('click', ev => {
         <div class="fld" style="--c:${COLORS[S.profiles.length % COLORS.length]}"><i></i><input id="np" placeholder="Nombre" maxlength="20"></div>
         <button class="btn wide" data-a="addok">Agregar</button><button class="btn ghost wide" data-a="sheetx">Cancelar</button>`); return;
     case 'addok': { const p = addProfile($('#np').value); S.pid = p.id; S.tab = 'train'; closeSheet(); toast(`Entrenando: ${p.name}`); break; }
-    case 'sheetx': closeSheet(); return;
+    case 'sheetx': closeSheet(); if (!S.profiles.length) renderPeople0(); return;
+    case 'loginsheet': openSheet(`<h2>Iniciar sesión ☁</h2><p>Traé tus personas, pesos y rutina guardados en la nube.</p>${loginForm()}
+        <button class="btn ghost wide" data-a="sheetx">Volver</button>`); return;
+    case 'login': case 'signup': doLogin(a === 'signup'); return;
+    case 'logout': cloud.sb.auth.signOut(); toast('Sesión cerrada. Los datos quedan en este celular.'); return;
+    case 'syncnow': cloudPull(); return;
+    case 'pushrt': if (!confirm('Esto reemplaza los días y ejercicios de Progreso Gym por esta rutina (el historial de series se conserva). ¿Seguir?')) return;
+      pushRoutine().then(() => toast('Rutina enviada a Progreso Gym ✓')).catch(e => alert('No se pudo enviar: ' + e.message)); return;
     case 'flmore': { const n = $$('#fl .fld').length; if (n >= 6) return; $('#fl').insertAdjacentHTML('beforeend', `<div class="fld" style="--c:${COLORS[n]}"><i></i><input placeholder="Persona ${n + 1} (opcional)" maxlength="20"></div>`); $$('#fl input')[n].focus(); return; }
     case 'flok': { const names = [...$$('#fl input')].map(i => i.value.trim()).filter(Boolean); (names.length ? names : ['Yo']).forEach(addProfile);
       S.pid = S.profiles[0].id; closeSheet(); break; }
@@ -778,6 +918,7 @@ document.addEventListener('click', ev => {
     case 'set': { const { day, ex } = findEx(k), L = getLog(day, ex, ex.sets), i = +el.dataset.i, s = L.sets[i];
       s.done = !s.done; buzz(20);
       if (s.done) {
+        stamp(L);
         const last = lastLog(day, ex), ph = (last && last.log.sets[i]) || {};
         if (s.kg === '') s.kg = phKg(L, last, i);
         if (s.reps === '') s.reps = ph.reps || '';
@@ -792,7 +933,7 @@ document.addEventListener('click', ev => {
       // si está vacío, el primer toque usa la sugerencia (peso anterior o mínimo de reps)
       const cur = num(L.sets[i][f]), ph = num(inp && inp.placeholder);
       const v = Math.max(0, Math.round((cur == null ? (ph ?? Math.max(0, d)) : cur + d) * 100) / 100);
-      L.sets[i][f] = String(v); if (inp) inp.value = String(v); buzz(8); save();
+      L.sets[i][f] = String(v); if (inp) inp.value = String(v); stamp(L); buzz(8); save();
       if (f === 'kg') refreshPlaceholders(k);
       return; }
     case 'sw': { audio(); wake(); const t = S.timers[k] || (S.timers[k] = { acc: 0, start: null });
@@ -826,6 +967,14 @@ document.addEventListener('change', async ev => {
     if (dn >= tot) el.closest('details').open = false; }
   if (el.dataset.set === 'strOn') { S.strength.on = el.checked; save(); }
   if (el.dataset.set === 'strFrom') { S.strength.from = Math.max(1, +el.value || 5); save(); }
+  if (el.dataset.set === 'cloudPid') {
+    const old = cloudPerson().id; S.cloudPid = el.value; save();
+    if (cloud.user && old !== el.value) {   // saca del historial los pesos de la persona anterior
+      await cloud.sb.from('workout_sets').delete().like('source_key', old + '|%');
+      try { localStorage.removeItem(SYNC_KEY); } catch (e) {}
+      cloudPush(); toast(`Ahora se sincronizan los pesos de ${cloudPerson().name}`);
+    }
+  }
   if (el.dataset.set === 'awake') { S.keepAwake = el.checked; save(); if (!el.checked && WL) { WL.release(); WL = null; } else wake(); }
   if (el.dataset.pname) { const p = prof(el.dataset.pname); p.name = el.value.trim() || p.name; save(); renderPeople(); }
   if (el.dataset.file === 'routine' && el.files[0]) {
@@ -851,7 +1000,7 @@ document.addEventListener('input', ev => {
   const el = ev.target; if (!el.dataset.in) return;
   const { day, ex } = findEx(el.dataset.k), L = getLog(day, ex, ex.sets);
   L.sets[+el.dataset.i][el.dataset.in] = el.value.trim();
-  save();
+  stamp(L); save();
   if (el.dataset.in === 'kg') refreshPlaceholders(el.dataset.k);
 });
 document.addEventListener('keydown', ev => {
@@ -860,6 +1009,7 @@ document.addEventListener('keydown', ev => {
 document.addEventListener('pointerdown', () => { audio(); if (S.tab === 'train') wake(); }, { passive: true });
 
 render();
+cloudInit();
 </script>
 </body>
 </html>
