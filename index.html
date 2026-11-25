@@ -711,6 +711,8 @@ function collectSessions(p, range) {
     const dates = [gen, ...items.map(x => x.L)].filter(L => L && L.date).map(L => L.date).sort();
     out.push({ w, day, date: dates[0] || null, gen, items });
   });
+  // entrenamientos fuera de la rutina (otra rutina, cardio, deporte…)
+  (S.extras || []).filter(x => x.pid === p.id).forEach(x => out.push({ w: x.w, extra: x, day: { id: '_x', name: x.name }, date: x.date, gen: null, items: [] }));
   out.sort((a, b) => a.w - b.w || (a.date && b.date ? a.date.localeCompare(b.date) : 0));
   if (range === 'last') return out.slice(-1);
   if (range === 'week') return out.filter(s => s.w === p.week);
@@ -730,6 +732,25 @@ function setsText(L, ex) {
   if (kgs.length === 1) return kgs[0] ? `${kgs[0]} kg × ${f.map(reps).join(' / ')}` : `${f.map(reps).join(' / ')} reps (sin peso)`;
   return f.map(s => `${kgOf(s) ? kgOf(s) + ' kg' : 'sin peso'} × ${reps(s)}`).join(' · ');
 }
+/** Texto de las series de un ejercicio guardado "tal cual" (entrenos fuera de la rutina). */
+function rawSetsText(x) {
+  if (x.omitido) return '❌ No lo hice';
+  const ser = x.series || [];
+  if (!ser.length) return '';
+  const L = { done: true, sets: ser.map(s => ({ kg: s.peso_kg ? String(s.peso_kg) : '', reps: s.reps != null ? String(s.reps) : s.duracion_seg != null ? String(s.duracion_seg) : '' })) };
+  return setsText(L, { timed: ser.some(s => s.duracion_seg != null) });
+}
+function extraLines(x, pre = '') {
+  const out = [];
+  if (x.note && x.note.trim()) out.push(`${pre}📝 ${x.note.trim()}`);
+  if (!(x.items || []).length) out.push(`${pre}_Sin ejercicios anotados_`);
+  for (const it of x.items || []) {
+    const v = rawSetsText(it);
+    out.push(v ? `• *${it.nombre}*\n   ${v}` : `• ${it.nombre}`);
+    if (it.nota) out.push(`   _Nota: ${it.nota}_`);
+  }
+  return out;
+}
 const RANGE_TXT = { last: 'último entreno', week: 'semana actual', all: 'todo el historial', today: 'entreno de hoy' };
 function exportText(sessions, p, range) {
   const out = [`🏋️ *Historial de entrenamiento – ${p.name}*`];
@@ -741,6 +762,7 @@ function exportText(sessions, p, range) {
   for (const s of sessions) {
     if (s.w !== curW) { curW = s.w; out.push('', '━━━━━━━━━━━━', `*SEMANA ${s.w}*`); }
     out.push('', `📅 *${s.date ? fmtDate(s.date) + ' · ' : ''}${s.day.name}*`);
+    if (s.extra) { out.push('🔁 Fuera de la rutina', ...extraLines(s.extra)); continue; }
     if (s.gen && s.gen.done) out.push(`🔥 Entrada en calor: ${s.gen.mode || 'Cardio'} ${s.gen.dur || ''} min`.trim());
     if (s.gen && s.gen.note && s.gen.note.trim()) out.push(`📝 ${s.gen.note.trim()}`);
     for (const { ex, L } of s.items) {
@@ -759,7 +781,10 @@ function exportText(sessions, p, range) {
 function exportJSON(sessions, p) {
   return {
     usuario: p.name, rutina: S.routine.title || '', exportado: today(),
-    sesiones: sessions.map(s => ({
+    sesiones: sessions.map(s => s.extra ? {
+      fecha: s.date, semana: s.w, dia: s.extra.name, fuera_de_rutina: true,
+      ...(s.extra.note ? { nota: s.extra.note } : {}), ejercicios: s.extra.items || []
+    } : ({
       fecha: s.date, semana: s.w, dia: s.day.name,
       ...(s.gen && s.gen.note ? { nota: s.gen.note } : {}),
       ...(s.gen && s.gen.done ? { entrada_en_calor: `${s.gen.mode || 'Cardio'} ${s.gen.dur || ''} min`.trim() } : {}),
@@ -805,15 +830,21 @@ function matchEx(day, name) {
   day.exercises.forEach(e => { const et = new Set(toks(e.name)); const sc = t.filter(x => et.has(x)).length / t.length; if (sc > bs) { bs = sc; best = e; } });
   return bs >= 0.5 ? best : null;
 }
+/** Guarda (o reemplaza, si ya existe ese día con ese nombre) un entreno fuera de la rutina. */
+function addExtra(p, w, x) {
+  S.extras = (S.extras || []).filter(e => !(e.pid === p.id && e.date === x.date && e.name === x.name));
+  S.extras.push({ id: 'x' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), pid: p.id, w, date: x.date, name: x.name, note: x.note || '', items: x.items || [] });
+}
 function monday(ds) { const t = new Date(ds + 'T12:00'); t.setDate(t.getDate() - ((t.getDay() + 6) % 7)); return t; }
 function importSessions(d, p) {
   const ses = d.sesiones.filter(s => s && s.fecha).sort((a, b) => a.fecha.localeCompare(b.fecha));
   const m0 = ses.length ? monday(ses[0].fecha) : null;
   const ops = [], skipped = []; let n = 0, used = 0;
   for (const s of ses) {
-    const day = matchDay(s.dia || ''), exs = s.ejercicios || [];
-    if (!day) { if (exs.length) skipped.push(`${s.dia} (${s.fecha})`); continue; }
+    const day = s.fuera_de_rutina ? null : matchDay(s.dia || ''), exs = s.ejercicios || [];
     const w = s.semana || Math.round((monday(s.fecha) - m0) / (7 * 864e5)) + 1; used++;
+    // si no es un día de la rutina, se guarda igual como entreno "fuera de la rutina"
+    if (!day) { n += exs.length; ops.push({ w, extra: { name: s.dia || 'Otro entrenamiento', date: s.fecha, note: s.nota || '', items: exs } }); continue; }
     const extra = ((s.dia || '').match(/\(([^)]*)\)/) || [])[1];
     ops.push({ w, day, gen: true, date: s.fecha, note: [s.nota, extra].filter(Boolean).join(' · ') });
     for (const x of exs) { const e = matchEx(day, x.nombre || ''); if (!e) { skipped.push(x.nombre); continue; } n++; ops.push({ w, day, ex: e, x, date: s.fecha }); }
@@ -822,6 +853,7 @@ function importSessions(d, p) {
     let maxW = p.week;
     for (const o of ops) {
       maxW = Math.max(maxW, o.w);
+      if (o.extra) { addExtra(p, o.w, o.extra); continue; }
       if (o.gen) { const g = getLog(o.day, { id: '_gen' }, 0, o.w, p.id); g.date = g.date || o.date; if (o.note) g.note = o.note; continue; }
       const L = getLog(o.day, o.ex, 0, o.w, p.id), x = o.x; L.date = o.date;
       if (x.omitido || x.sin_registrar) { L.sets = []; L.skipped = !!x.omitido; L.done = !!x.omitido; }
@@ -942,7 +974,17 @@ function renderHist() {
     <div class="share"><button class="btn" data-a="xshare">📤 Compartir</button><button class="btn ghost" data-a="xcopy">📋 Copiar</button>
       <button class="btn ghost sm" data-a="xtxt">⬇ Descargar .txt</button><button class="btn ghost sm" data-a="xjson">⬇ Descargar JSON</button></div>
     <details><summary style="cursor:pointer;color:var(--acc);font-weight:600;padding:8px 0 0">Ver el mensaje</summary><pre class="msg">${esc(msg)}</pre></details></section>
-    <section class="card"><h3>Historial de ${esc(p.name)}</h3><p>Peso × repeticiones de cada semana. Tocá otra persona arriba para ver el suyo.</p></section>`;
+    <section class="card"><h3>Historial de ${esc(p.name)}</h3><p>Peso × repeticiones de cada semana. Tocá otra persona arriba para ver el suyo.</p>
+      <button class="btn ghost wide sm" data-a="xadd">+ Anotar entreno fuera de la rutina</button></section>`;
+  const ex = (S.extras || []).filter(x => x.pid === p.id).sort((a, b) => b.date.localeCompare(a.date));
+  if (ex.length) {
+    any = true;
+    h += `<div class="hday">Fuera de la rutina</div>` + ex.map(x => `<div class="card hex"><div class="row"><b class="grow">${esc(x.name)}</b>
+        <button class="x" data-a="xdel" data-v="${x.id}" aria-label="Borrar ${esc(x.name)}" style="border:0;background:var(--soft);border-radius:10px;width:36px;height:36px;color:var(--danger)">🗑</button></div>
+      <div class="hw cur"><span>Sem ${x.w} · ${fmtDate(x.date)}</span><span>${(x.items || []).length ? (x.items || []).length + ' ejercicios' : ''}</span></div>
+      ${x.note ? `<div class="hw"><span class="nn">${esc(x.note)}</span></div>` : ''}
+      ${(x.items || []).map(it => `<div class="hw"><span>${esc(it.nombre)}</span><span style="text-align:right">${esc(rawSetsText(it) || '—')}${it.nota ? `<span class="nn">${esc(it.nota)}</span>` : ''}</span></div>`).join('')}</div>`).join('');
+  }
   r.days.forEach(d => {
     h += `<div class="hday">${esc(d.label)} · ${esc(d.name)}</div>`;
     d.exercises.forEach(e => {
@@ -1073,7 +1115,7 @@ document.addEventListener('click', ev => {
     case 'pdel': { const p = prof(el.dataset.v);
       if (!confirm(`¿Borrar a ${p.name} y todos sus registros? No se puede deshacer.`)) return;
       S.profiles = S.profiles.filter(x => x.id !== p.id);
-      for (const key in S.logs) if (key.startsWith(p.id + '|')) delete S.logs[key];
+      for (const key in S.logs) if (key.startsWith(p.id + '|')) delete S.logs[key]; S.extras = (S.extras || []).filter(e => e.pid !== p.id);
       for (const key in S.timers) if (key.startsWith(p.id + '|')) delete S.timers[key];
       for (const key in S.cd) if (S.cd[key].pid === p.id) delete S.cd[key];
       if (S.pid === p.id) S.pid = S.profiles[0].id; break; }
@@ -1094,6 +1136,18 @@ document.addEventListener('click', ev => {
       L.skipped = !L.skipped; L.done = L.skipped; stamp(L); buzz(20);
       if (L.skipped) { stopTimer(k); scrollK = openNext(k); if (!scrollK) delete S.open[k]; } break; }
     case 'xrange': S.xrange = el.dataset.v; break;
+    case 'xadd': openSheet(`<h2>Entreno fuera de la rutina</h2><p>Otra rutina, cardio, fútbol… Queda en tu historial y en lo que compartas.</p>
+        <div class="fld"><input id="xname" placeholder="Qué hiciste (ej: Pecho y bíceps)" maxlength="60"></div>
+        <div class="fld"><input id="xdate" type="date" value="${today()}" max="${today()}"></div>
+        <textarea class="rt" id="xnote" rows="3" placeholder="Ejercicios y pesos, cómo te sentiste… (opcional)" style="font-family:inherit;font-size:15px"></textarea>
+        <button class="btn wide" data-a="xaddok">Guardar</button><button class="btn ghost wide" data-a="sheetx">Cancelar</button>`); return;
+    case 'xaddok': { const name = $('#xname').value.trim(), date = $('#xdate').value || today();
+      if (!name) { $('#xname').focus(); return; }
+      const p = P(), w = Math.max(1, p.week - Math.round((monday(today()) - monday(date)) / (7 * 864e5)));
+      addExtra(p, w, { name, date, note: $('#xnote').value.trim(), items: [] }); closeSheet(); toast('Entreno guardado'); break; }
+    case 'xdel': { const x = (S.extras || []).find(e => e.id === el.dataset.v);
+      if (!x || !confirm(`¿Borrar "${x.name}" del ${fmtDate(x.date)}? No se puede deshacer.`)) return;
+      S.extras = S.extras.filter(e => e.id !== x.id); break; }
     case 'xshare': case 'xcopy': case 'xtxt': case 'xjson': doExport(a, el.dataset.r); return;
     case 'importsheet': openSheet(`<h2>Importar historial</h2><p>Pegá el JSON de tu historial (con "sesiones") o elegí el archivo. Se carga en <b>${esc(P().name)}</b>.</p>
         <textarea class="rt" id="imptxt" rows="8" placeholder='{ "usuario": "...", "sesiones": [ ... ] }'></textarea>
@@ -1141,7 +1195,7 @@ document.addEventListener('click', ev => {
     case 'export': { const blob = new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' });
       const u = URL.createObjectURL(blob), A = document.createElement('a'); A.href = u; A.download = `rutinas-gym-${new Date().toISOString().slice(0, 10)}.json`; A.click(); setTimeout(() => URL.revokeObjectURL(u), 1000); return; }
     case 'wipe': { const p = P(); if (!confirm(`¿Borrar todos los pesos y tiempos de ${p.name}? La rutina y las demás personas no se tocan. No se puede deshacer.`)) return;
-      for (const key in S.logs) if (key.startsWith(p.id + '|')) delete S.logs[key];
+      for (const key in S.logs) if (key.startsWith(p.id + '|')) delete S.logs[key]; S.extras = (S.extras || []).filter(e => e.pid !== p.id);
       for (const key in S.timers) if (key.startsWith(p.id + '|')) delete S.timers[key];
       p.week = 1; toast('Registros borrados'); break; }
     default: return;
