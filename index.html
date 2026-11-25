@@ -133,6 +133,21 @@ details.warm[open] summary{border-bottom:1px solid var(--line)}
 .wl label{display:flex;gap:12px;align-items:center;padding:8px 0;font-size:15px;cursor:pointer}
 .wl input{width:22px;height:22px;flex:none;accent-color:var(--ok)}
 .wl label.ok span{text-decoration:line-through;color:var(--muted)}
+details.warm{border:1px dashed var(--line-2);background:transparent}
+details.warm summary{padding:8px 12px;font-weight:600;font-size:14px;color:var(--muted)}
+details.warm summary em{font-style:normal;font-weight:500;font-size:12px;opacity:.8}
+details.warm[open] summary{color:var(--text)}
+details.nt{margin-top:10px}
+details.nt summary{list-style:none;cursor:pointer;font-size:14px;font-weight:600;color:var(--muted);padding:6px 0}
+details.nt summary::-webkit-details-marker{display:none}
+details.nt textarea{width:100%;border:1px solid var(--line-2);border-radius:12px;padding:10px;background:var(--card);font-size:15px;resize:vertical}
+.skip{display:block;margin:6px auto 0;border:0;background:none;color:var(--muted);font-size:13px;text-decoration:underline;padding:8px}
+.ex.skipped .exname b{text-decoration:line-through}
+.ex.skipped .sum{color:var(--muted)}
+.share{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.share .btn{flex:1 1 calc(50% - 4px)}
+pre.msg{white-space:pre-wrap;font:13px/1.45 ui-monospace,Consolas,monospace;background:var(--soft);border-radius:12px;padding:12px;margin:8px 0 0;max-height:320px;overflow:auto}
+.hw .nn{display:block;color:var(--muted);font-size:12px;font-style:italic}
 
 .sets-h,.set{display:grid;grid-template-columns:26px 1fr 1fr 42px;gap:8px;align-items:center}
 .sets-h{font-size:12px;color:var(--muted);font-weight:600;padding:0 0 4px;text-align:center}
@@ -504,7 +519,9 @@ async function wake() {
   if (!S.keepAwake || WL || !navigator.wakeLock || document.visibilityState !== 'visible') return;
   try { WL = await navigator.wakeLock.request('screen'); WL.addEventListener('release', () => { WL = null; }); } catch (e) {}
 }
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { wake(); tick(); } });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { wake(); tick(); } else { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} } });
+window.addEventListener('pageshow', () => tick());
+window.addEventListener('pagehide', () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} });
 function startCd(id, sec, label, kind, extra = {}) {
   audio(); wake();
   S.cd[id] = { end: Date.now() + sec * 1000, total: sec, label, kind, pid: S.pid, ...extra };
@@ -521,7 +538,10 @@ function tick() {
       if (c.kind === 'cardio' && S.logs[c.key]) { S.logs[c.key].done = true; rerender = true; }
       save();
     }
-    if (c.fired && now - c.fired > 7000) { delete S.cd[id]; save(); }
+    // El descanso NO desaparece solo: si bloqueaste el celular, al volver sigue ahí mostrando
+    // cuánto tiempo pasó de más (+0:42) hasta que lo cierres o marques la próxima serie.
+    const gone = c.kind === 'rest' ? now - c.end > 20 * 60000 : now - c.fired > 7000;
+    if (c.fired && gone) { delete S.cd[id]; save(); }
   }
   // pila de temporizadores (solo se reconstruye si cambia)
   const ids = Object.keys(S.cd).sort();
@@ -530,7 +550,7 @@ function tick() {
     stackSig = sig;
     $('#timers').innerHTML = ids.map(id => {
       const c = S.cd[id], p = prof(c.pid), many = S.profiles.length > 1;
-      const what = c.fired ? (c.kind === 'cardio' ? '¡Entrada en calor lista!' : '¡A la próxima serie!') : (c.kind === 'cardio' ? 'Entrada en calor' : 'Descanso');
+      const what = c.fired ? (c.kind === 'cardio' ? '¡Entrada en calor lista!' : '✓ Descanso terminado') : (c.kind === 'cardio' ? 'Entrada en calor' : 'Descanso');
       return `<div class="tm ${c.fired ? 'fin' : ''}" style="--c:${p.color}">
         <button class="who" data-a="who" data-v="${p.id}" aria-label="Ir a ${esc(p.name)}">${esc(initial(p.name))}</button>
         <div class="tl"><small>${what}${many ? ' · ' + esc(p.name) : ''}</small><b>${esc(c.label)}</b></div>
@@ -542,7 +562,7 @@ function tick() {
     // deja lugar abajo para que los temporizadores no tapen el último ejercicio
     $('main').style.paddingBottom = `calc(${90 + $('#timers').offsetHeight}px + env(safe-area-inset-bottom))`;
   }
-  $$('[data-cd]').forEach(el => { const c = S.cd[el.dataset.cd]; if (c) el.textContent = c.fired ? '0:00' : fmtT(Math.ceil((c.end - now) / 1000)); });
+  $$('[data-cd]').forEach(el => { const c = S.cd[el.dataset.cd]; if (c) el.textContent = c.fired ? (c.kind === 'rest' ? '+' + fmtT((now - c.end) / 1000) : '0:00') : fmtT(Math.ceil((c.end - now) / 1000)); });
   $$('[data-pb]').forEach(el => { const c = S.cd[el.dataset.pb]; if (c) el.style.width = (c.fired ? 100 : Math.min(100, (1 - (c.end - now) / 1000 / c.total) * 100)) + '%'; });
   $$('[data-timer]').forEach(el => el.textContent = fmtT(tval(el.dataset.timer)));
   $$('.pp[data-v]').forEach(el => { const b = el.querySelector('.busy'); const busy = !!S.cd['rest-' + el.dataset.v] || !!S.cd['cardio-' + el.dataset.v];
@@ -676,6 +696,145 @@ async function doLogin(signup) {
   toast('Sesión iniciada ☁'); closeSheet(); render();
 }
 
+/* ---------- exportar historial (WhatsApp / IA / respaldo) ---------- */
+const DIAS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+function fmtDate(d) { const t = new Date(d + 'T12:00'); return `${DIAS[t.getDay()]} ${String(t.getDate()).padStart(2, '0')}/${String(t.getMonth() + 1).padStart(2, '0')}`; }
+/** Agrupa los registros de una persona en entrenamientos (semana + día). */
+function collectSessions(p, range) {
+  const out = []; let maxW = 1;
+  for (const key in S.logs) { const [pid, w] = key.split('|'); if (pid === p.id) maxW = Math.max(maxW, +w); }
+  for (let w = 1; w <= maxW; w++) S.routine.days.forEach(day => {
+    const gen = S.logs[lk(day, { id: '_gen' }, w, p.id)];
+    const items = day.exercises.map((e0, i) => { const ex = eff(e0, i, w); return { ex, L: S.logs[lk(day, ex, w, p.id)] }; });
+    const has = items.some(({ L }) => L && (filled(L).length || L.done || L.note || L.skipped)) || (gen && (gen.note || gen.done));
+    if (!has) return;
+    const dates = [gen, ...items.map(x => x.L)].filter(L => L && L.date).map(L => L.date).sort();
+    out.push({ w, day, date: dates[0] || null, gen, items });
+  });
+  out.sort((a, b) => a.w - b.w || (a.date && b.date ? a.date.localeCompare(b.date) : 0));
+  if (range === 'last') return out.slice(-1);
+  if (range === 'week') return out.filter(s => s.w === p.week);
+  if (range === 'today') { const d = S.routine.days[p.day]; return out.filter(s => s.w === p.week && s.day.id === d.id); }
+  return out;
+}
+function setsText(L, ex) {
+  const f = filled(L);
+  if (!f.length) return L && L.done ? 'hecho (sin pesos anotados)' : '';
+  const reps = s => s.reps !== '' ? s.reps : '?', kgOf = s => num(s.kg) ? fmtKg(num(s.kg)) : '';
+  if (ex.timed) { const kg = f.map(kgOf).find(Boolean); return f.map(s => reps(s) + ' seg').join(' / ') + (kg ? ` (con ${kg} kg)` : ''); }
+  const kgs = [...new Set(f.map(kgOf))];
+  if (f.every(s => s.reps === '')) {   // solo se anotó el peso
+    const ks = f.map(kgOf);
+    return ks.every(Boolean) ? `${kgs.length === 1 ? ks[0] : ks.join(' / ')} kg · reps sin anotar` : `${f.length} series · sin datos de peso ni reps`;
+  }
+  if (kgs.length === 1) return kgs[0] ? `${kgs[0]} kg × ${f.map(reps).join(' / ')}` : `${f.map(reps).join(' / ')} reps (sin peso)`;
+  return f.map(s => `${kgOf(s) ? kgOf(s) + ' kg' : 'sin peso'} × ${reps(s)}`).join(' · ');
+}
+const RANGE_TXT = { last: 'último entreno', week: 'semana actual', all: 'todo el historial', today: 'entreno de hoy' };
+function exportText(sessions, p, range) {
+  const out = [`🏋️ *Historial de entrenamiento – ${p.name}*`];
+  if (S.routine.title) out.push(`Rutina: ${S.routine.title}`);
+  out.push(`Exportado: ${fmtDate(today())}/${today().slice(0, 4)} · ${RANGE_TXT[range] || ''}`);
+  out.push('Formato: peso × repeticiones de cada serie. Entre paréntesis, el objetivo de la rutina.');
+  if (!sessions.length) { out.push('', 'Todavía no hay entrenamientos registrados en este rango.'); return out.join('\n'); }
+  let curW = 0;
+  for (const s of sessions) {
+    if (s.w !== curW) { curW = s.w; out.push('', '━━━━━━━━━━━━', `*SEMANA ${s.w}*`); }
+    out.push('', `📅 *${s.date ? fmtDate(s.date) + ' · ' : ''}${s.day.name}*`);
+    if (s.gen && s.gen.done) out.push(`🔥 Entrada en calor: ${s.gen.mode || 'Cardio'} ${s.gen.dur || ''} min`.trim());
+    if (s.gen && s.gen.note && s.gen.note.trim()) out.push(`📝 ${s.gen.note.trim()}`);
+    for (const { ex, L } of s.items) {
+      const obj = `(${ex.sets}×${ex.reps}${ex.unit ? ' ' + ex.unit : ''})`;
+      const v = L && L.skipped ? '❌ No lo hice' : setsText(L, ex);
+      if (!v) { out.push(`• ${ex.name} — _sin registrar_`); }
+      else { out.push(`• *${ex.name}* ${obj}`, `   ${v}`); }
+      const t = L ? tval(lk(s.day, ex, s.w, p.id)) : 0;
+      if (t >= 30 && !(L && L.skipped)) out[out.length - 1] += ` · ⏱ ${fmtT(t)}`;
+      if (L && L.note && L.note.trim()) out.push(`   _Nota: ${L.note.trim()}_`);
+    }
+  }
+  out.push('', '_Generado con Rutinas Gym_');
+  return out.join('\n');
+}
+function exportJSON(sessions, p) {
+  return {
+    usuario: p.name, rutina: S.routine.title || '', exportado: today(),
+    sesiones: sessions.map(s => ({
+      fecha: s.date, semana: s.w, dia: s.day.name,
+      ...(s.gen && s.gen.note ? { nota: s.gen.note } : {}),
+      ...(s.gen && s.gen.done ? { entrada_en_calor: `${s.gen.mode || 'Cardio'} ${s.gen.dur || ''} min`.trim() } : {}),
+      ejercicios: s.items.map(({ ex, L }) => {
+        const o = { nombre: ex.name, objetivo: `${ex.sets}x${ex.reps}${ex.unit ? ' ' + ex.unit : ''}` };
+        if (L && L.skipped) o.omitido = true;
+        else if (!L || (!filled(L).length && !L.done)) o.sin_registrar = true;
+        else o.series = filled(L).map(x => ex.timed ? { peso_kg: num(x.kg) || 0, duracion_seg: num(x.reps) } : { peso_kg: num(x.kg), reps: num(x.reps) });
+        if (L && L.note) o.nota = L.note;
+        return o;
+      })
+    }))
+  };
+}
+async function copyText(t) {
+  try { await navigator.clipboard.writeText(t); return true; } catch (e) {}
+  const ta = document.createElement('textarea'); ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select();
+  let ok = false; try { ok = document.execCommand('copy'); } catch (e) {} ta.remove(); return ok;
+}
+function download(name, content, type) {
+  const u = URL.createObjectURL(new Blob([content], { type })), A = document.createElement('a');
+  A.href = u; A.download = name; A.click(); setTimeout(() => URL.revokeObjectURL(u), 1000);
+}
+async function doExport(a, r) {
+  const p = P(), range = r || S.xrange || 'week', ses = collectSessions(p, range);
+  if (!ses.length) { toast('No hay entrenamientos en ese rango'); return; }
+  const text = exportText(ses, p, range), base = `historial-${slug(p.name)}-${today()}`;
+  if (a === 'xtxt') { download(base + '.txt', text, 'text/plain;charset=utf-8'); return; }
+  if (a === 'xjson') { download(base + '.json', JSON.stringify(exportJSON(ses, p), null, 2), 'application/json'); return; }
+  if (a === 'xshare' && navigator.share) {
+    try { await navigator.share({ title: `Historial – ${p.name}`, text }); return; } catch (e) { if (e && e.name === 'AbortError') return; }
+  }
+  toast(await copyText(text) ? '📋 Copiado: pegalo en WhatsApp' : 'No se pudo copiar');
+}
+
+/* ---------- importar historial (JSON con "sesiones") ---------- */
+const STOP = new Set(['de', 'con', 'en', 'o', 'la', 'el', 'al', 'y', 'a', 'del', 'los', 'las', 'por']);
+const toks = s => slug(s).split('-').filter(t => t.length > 1 && !STOP.has(t));
+function matchDay(name) { const s = slug(name); return S.routine.days.find(d => s === d.id || s.startsWith(d.id + '-')) || S.routine.days.find(d => s.includes(d.id)); }
+function matchEx(day, name) {
+  const t = toks(name); if (!t.length) return null;
+  let best = null, bs = 0;
+  day.exercises.forEach(e => { const et = new Set(toks(e.name)); const sc = t.filter(x => et.has(x)).length / t.length; if (sc > bs) { bs = sc; best = e; } });
+  return bs >= 0.5 ? best : null;
+}
+function monday(ds) { const t = new Date(ds + 'T12:00'); t.setDate(t.getDate() - ((t.getDay() + 6) % 7)); return t; }
+function importSessions(d, p) {
+  const ses = d.sesiones.filter(s => s && s.fecha).sort((a, b) => a.fecha.localeCompare(b.fecha));
+  const m0 = ses.length ? monday(ses[0].fecha) : null;
+  const ops = [], skipped = []; let n = 0, used = 0;
+  for (const s of ses) {
+    const day = matchDay(s.dia || ''), exs = s.ejercicios || [];
+    if (!day) { if (exs.length) skipped.push(`${s.dia} (${s.fecha})`); continue; }
+    const w = s.semana || Math.round((monday(s.fecha) - m0) / (7 * 864e5)) + 1; used++;
+    const extra = ((s.dia || '').match(/\(([^)]*)\)/) || [])[1];
+    ops.push({ w, day, gen: true, date: s.fecha, note: [s.nota, extra].filter(Boolean).join(' · ') });
+    for (const x of exs) { const e = matchEx(day, x.nombre || ''); if (!e) { skipped.push(x.nombre); continue; } n++; ops.push({ w, day, ex: e, x, date: s.fecha }); }
+  }
+  return { n, ses: used, skipped: [...new Set(skipped)], apply() {
+    let maxW = p.week;
+    for (const o of ops) {
+      maxW = Math.max(maxW, o.w);
+      if (o.gen) { const g = getLog(o.day, { id: '_gen' }, 0, o.w, p.id); g.date = g.date || o.date; if (o.note) g.note = o.note; continue; }
+      const L = getLog(o.day, o.ex, 0, o.w, p.id), x = o.x; L.date = o.date;
+      if (x.omitido || x.sin_registrar) { L.sets = []; L.skipped = !!x.omitido; L.done = !!x.omitido; }
+      else {
+        L.sets = (x.series || []).map(s => ({ kg: s.peso_kg ? String(s.peso_kg) : '', reps: s.reps != null ? String(s.reps) : s.duracion_seg != null ? String(s.duracion_seg) : '', done: true }));
+        L.done = true; L.skipped = false;
+      }
+      if (x.nota) L.note = x.nota;
+    }
+    p.week = maxW;
+  } };
+}
+
 /* ---------- vistas ---------- */
 function renderPeople() {
   $('#people').innerHTML = S.profiles.map(p => `<button class="pp ${p.id === S.pid ? 'on' : ''}" style="--c:${p.color}" data-a="who" data-v="${p.id}"><i>${esc(initial(p.name))}</i><span>${esc(p.name)}</span></button>`).join('')
@@ -702,11 +861,11 @@ function genCard(day) {
 function exCard(day, e0, i) {
   const ex = eff(e0, i), L = getLog(day, ex, ex.sets), k = lk(day, ex), open = !!S.open[k];
   const sum = fmtLog(L, ex);
-  return `<article class="ex ${ex.type === 'Básico' ? 'basic' : ''} ${L.done ? 'done' : ''} ${open ? 'open' : ''}" data-exk="${k}">
+  return `<article class="ex ${ex.type === 'Básico' ? 'basic' : ''} ${L.done ? 'done' : ''} ${L.skipped ? 'skipped' : ''} ${open ? 'open' : ''}" data-exk="${k}">
     <div class="exh"><button class="tick ${L.done ? 'on' : ''}" data-a="exdone" data-k="${k}" aria-label="Marcar ${esc(ex.name)} como hecho">✓</button>
       <button class="exname" data-a="open" data-k="${k}" aria-expanded="${open}"><b>${esc(ex.name)}${ex.star ? ' *' : ''}</b>
         <span class="meta">${ex.sets} × ${esc(ex.reps)}${ex.unit ? ' ' + ex.unit : ''}${ex.each ? ' c/u' : ''} · desc. ${fmtT(ex.restSec)}${ex.type === 'Básico' ? '<em>Básico</em>' : ''}${ex.strength ? '<em class="f">Fuerza</em>' : ''}</span>
-        ${!open && sum ? `<span class="sum">${esc(sum)}</span>` : `<span class="dots">${L.sets.slice(0, ex.sets).map(s => `<i class="${s.done ? 'on' : ''}"></i>`).join('')}</span>`}
+        ${!open && L.skipped ? '<span class="sum">No lo hice</span>' : !open && sum ? `<span class="sum">${esc(sum)}</span>` : `<span class="dots">${L.sets.slice(0, ex.sets).map(s => `<i class="${s.done ? 'on' : ''}"></i>`).join('')}</span>`}
       </button><span class="chev" aria-hidden="true">⌄</span></div>
     ${open ? `<div class="exb">${detail(day, ex, L, k, i)}</div>` : ''}</article>`;
 }
@@ -725,7 +884,8 @@ function detail(day, ex, L, k, idx) {
   let h = '';
   if (last) h += `<div class="last">Última vez (sem ${last.w}): <b>${esc(fmtLog(last.log, ex))}</b>${sug ? `<span class="up">↑ ${esc(sug)}</span>` : ''}</div>`;
   if (star) h += `<div class="note">${esc(star.replace(/^\*\s*/, ''))}</div>`;
-  h += `<details class="warm" ${wd >= wt ? '' : 'open'}><summary>Precalentamiento <small>${Math.min(wd, wt)}/${wt}</small></summary><div class="wl" data-warm="${k}">${warmHTML(ex, L, k, baseKg(L, last))}</div></details>`;
+  // precalentamiento: siempre plegado, es opcional (se puede ocultar del todo en Personas)
+  if (S.showWarm !== false) h += `<details class="warm"><summary><span>🔥 Precalentamiento <em>opcional</em></span><small>${wd ? `${Math.min(wd, wt)}/${wt}` : 'Ver'}</small></summary><div class="wl" data-warm="${k}">${warmHTML(ex, L, k, baseKg(L, last))}</div></details>`;
   h += `<div class="sets-h"><span>#</span><span>Kg</span><span>${ex.timed ? 'Segundos' : 'Reps'}</span><span>✓</span></div>`;
   for (let i = 0; i < ex.sets; i++) {
     const s = L.sets[i], ph = (last && last.log.sets[i]) || {};
@@ -740,7 +900,10 @@ function detail(day, ex, L, k, idx) {
       <button class="btn sm ${running ? 'ghost' : ''}" data-a="sw" data-k="${k}">${running ? 'Pausar' : (t && t.acc ? 'Seguir' : '▶ Iniciar')}</button>
       ${t ? `<button class="btn sm ghost" data-a="swreset" data-k="${k}" aria-label="Reiniciar cronómetro">↺</button>` : ''}</div>
     <button class="btn ghost" data-a="rest" data-k="${k}">⏱ Descanso ${fmtT(ex.restSec)}</button>
-    <button class="btn ghost" data-a="next" data-k="${k}">${hasNext ? 'Siguiente →' : 'Cerrar'}</button></div>`;
+    <button class="btn ghost" data-a="next" data-k="${k}">${hasNext ? 'Siguiente →' : 'Cerrar'}</button></div>
+  <details class="nt" ${L.note ? 'open' : ''}><summary>📝 ${L.note ? 'Nota' : 'Agregar nota'}</summary>
+    <textarea data-note="${k}" rows="2" maxlength="300" placeholder="Ej: molestia en la espalda, peso aproximado, lo hice en casa…">${esc(L.note || '')}</textarea></details>
+  <button class="skip" data-a="skip" data-k="${k}">${L.skipped ? '↺ Lo hice al final' : 'Hoy no lo hice'}</button>`;
   return h;
 }
 
@@ -758,9 +921,13 @@ function renderTrain() {
       <div class="prog"><div class="bar"><i style="width:${pr.total ? pr.done / pr.total * 100 : 0}%"></i></div><span>${pr.done}/${pr.total}</span></div></section>`;
   h += genCard(day);
   h += day.exercises.map((e, i) => exCard(day, e, i)).join('');
+  const gl = getLog(day, { id: '_gen' }, 0);
+  h += `<details class="nt card" ${gl.note ? 'open' : ''} style="padding:8px 14px"><summary>📝 Nota del día ${gl.note ? '' : '<small style="font-weight:400">(ej: entrené en casa, dormí mal)</small>'}</summary>
+    <textarea data-dnote="${day.id}" rows="2" maxlength="300" placeholder="Cómo te sentiste, dónde entrenaste…">${esc(gl.note || '')}</textarea></details>`;
   if (pr.total && pr.done === pr.total) {
     const tot = day.exercises.reduce((a, e) => a + tval(lk(day, e)), 0);
-    h += `<section class="card done-card"><b>🎉 ¡${esc(day.name)} completo!</b>${tot > 0 ? `Tiempo en ejercicios: ${fmtT(tot)}` : 'Buen entrenamiento'}${S.profiles.length > 1 ? `<br>${esc(p.name)}, semana ${p.week}` : ''}</section>`;
+    h += `<section class="card done-card"><b>🎉 ¡${esc(day.name)} completo!</b>${tot > 0 ? `Tiempo en ejercicios: ${fmtT(tot)}` : 'Buen entrenamiento'}${S.profiles.length > 1 ? `<br>${esc(p.name)}, semana ${p.week}` : ''}
+      <div class="share"><button class="btn" data-a="xshare" data-r="today">📤 Compartir este entreno</button></div></section>`;
   }
   return h;
 }
@@ -769,12 +936,20 @@ function renderHist() {
   const r = S.routine, p = P();
   if (!r.days.length) return `<div class="empty">No hay rutina cargada.</div>`;
   let any = false;
-  let h = `<section class="card"><h3>Historial de ${esc(p.name)}</h3><p>Peso × repeticiones de cada semana. Tocá otra persona arriba para ver el suyo.</p></section>`;
+  const xr = S.xrange || 'week', msg = exportText(collectSessions(p, xr), p, xr);
+  let h = `<section class="card"><h3>📤 Compartir historial</h3><p>Mandalo por WhatsApp, guardalo como respaldo o pasáselo a una IA.</p>
+    <div class="seg sm" style="margin-top:0">${[['last', 'Último entreno'], ['week', `Semana ${p.week}`], ['all', 'Todo']].map(([v, t]) => `<button class="${xr === v ? 'on' : ''}" data-a="xrange" data-v="${v}">${t}</button>`).join('')}</div>
+    <div class="share"><button class="btn" data-a="xshare">📤 Compartir</button><button class="btn ghost" data-a="xcopy">📋 Copiar</button>
+      <button class="btn ghost sm" data-a="xtxt">⬇ Descargar .txt</button><button class="btn ghost sm" data-a="xjson">⬇ Descargar JSON</button></div>
+    <details><summary style="cursor:pointer;color:var(--acc);font-weight:600;padding:8px 0 0">Ver el mensaje</summary><pre class="msg">${esc(msg)}</pre></details></section>
+    <section class="card"><h3>Historial de ${esc(p.name)}</h3><p>Peso × repeticiones de cada semana. Tocá otra persona arriba para ver el suyo.</p></section>`;
   r.days.forEach(d => {
     h += `<div class="hday">${esc(d.label)} · ${esc(d.name)}</div>`;
     d.exercises.forEach(e => {
       const rows = [];
-      for (let w = Math.max(p.week, 12); w >= 1; w--) { const v = fmtLog(S.logs[lk(d, e, w)], e); if (v) rows.push(`<div class="hw ${w === p.week ? 'cur' : ''}"><span>Sem ${w}</span><span>${esc(v)}</span></div>`); }
+      for (let w = Math.max(p.week, 12); w >= 1; w--) { const L = S.logs[lk(d, e, w)]; if (!L) continue;
+        const v = L.skipped ? 'No lo hice' : setsText(L, e);
+        if (v || L.note) rows.push(`<div class="hw ${w === p.week ? 'cur' : ''}"><span>Sem ${w}${L.date ? ' · ' + fmtDate(L.date) : ''}</span><span style="text-align:right">${esc(v || '—')}${L.note ? `<span class="nn">${esc(L.note)}</span>` : ''}</span></div>`); }
       if (rows.length) any = true;
       h += `<div class="card hex"><b>${esc(e.name)}</b>${rows.length ? rows.join('') : '<div class="hw"><span>Sin registros todavía</span></div>'}</div>`;
     });
@@ -813,7 +988,8 @@ function renderCfg() {
   <section class="card"><h3>Entrenamiento</h3>
     <label class="opt"><span>Bloque de fuerza<br><small style="color:var(--muted)">1er básico del día a 4 × 4-6</small></span><input type="checkbox" data-set="strOn" ${S.strength.on ? 'checked' : ''}></label>
     <label class="opt"><span>Desde la semana</span><input type="number" min="1" max="52" data-set="strFrom" value="${S.strength.from}"></label>
-    <label class="opt"><span>Mantener la pantalla encendida</span><input type="checkbox" data-set="awake" ${S.keepAwake ? 'checked' : ''}></label></section>
+    <label class="opt"><span>Mantener la pantalla encendida</span><input type="checkbox" data-set="awake" ${S.keepAwake ? 'checked' : ''}></label>
+    <label class="opt"><span>Mostrar precalentamiento en cada ejercicio<br><small style="color:var(--muted)">Movilidad y series de aproximación (aparece plegado)</small></span><input type="checkbox" data-set="showWarm" ${S.showWarm !== false ? 'checked' : ''}></label></section>
   <section class="card"><h3>☁ Cuenta y nube</h3>
     ${cloud.user ? `<p>Conectado como <b>${esc(cloud.user.email)}</b> · <span id="cloudst">${cloudStatusHTML()}</span></p>
       <label class="opt"><span>Mis pesos son los de<br><small style="color:var(--muted)">Se pasan al historial de Progreso Gym</small></span>
@@ -825,6 +1001,7 @@ function renderCfg() {
   <section class="card"><h3>Tus datos</h3><p>${cloud.user ? 'Se guarda en el celular y en la nube.' : 'Todo se guarda en este celular. Hacé una copia de vez en cuando para no perder los pesos.'}</p>
     <div class="btns"><button class="btn ghost sm" data-a="export">Descargar copia</button>
     <label class="btn ghost sm" style="cursor:pointer">Restaurar copia<input type="file" accept=".json" data-file="backup" hidden></label>
+    <button class="btn ghost sm" data-a="importsheet">Importar historial (JSON)</button>
     <button class="btn danger sm" data-a="wipe">Borrar registros de ${esc(P().name)}</button></div></section>`;
 }
 
@@ -913,7 +1090,21 @@ document.addEventListener('click', ev => {
       if (a === 'gdur') g.dur = +el.dataset.v;
       if (a === 'gstart') startCd('cardio-' + S.pid, g.dur * 60, `${g.mode} · ${g.dur} min`, 'cardio', { key: gk });
       break; }
-    case 'exdone': { const { day, ex } = findEx(k), L = getLog(day, ex, ex.sets); L.done = !L.done; buzz(20);
+    case 'skip': { const { day, ex } = findEx(k), L = getLog(day, ex, ex.sets);
+      L.skipped = !L.skipped; L.done = L.skipped; stamp(L); buzz(20);
+      if (L.skipped) { stopTimer(k); scrollK = openNext(k); if (!scrollK) delete S.open[k]; } break; }
+    case 'xrange': S.xrange = el.dataset.v; break;
+    case 'xshare': case 'xcopy': case 'xtxt': case 'xjson': doExport(a, el.dataset.r); return;
+    case 'importsheet': openSheet(`<h2>Importar historial</h2><p>Pegá el JSON de tu historial (con "sesiones") o elegí el archivo. Se carga en <b>${esc(P().name)}</b>.</p>
+        <textarea class="rt" id="imptxt" rows="8" placeholder='{ "usuario": "...", "sesiones": [ ... ] }'></textarea>
+        <label class="btn ghost wide" style="cursor:pointer">📄 Elegir archivo .json<input type="file" accept=".json,.txt" data-file="imphist" hidden></label>
+        <button class="btn wide" data-a="importok">Importar</button><button class="btn ghost wide" data-a="sheetx">Cancelar</button>`); return;
+    case 'importok': { let d; try { d = JSON.parse($('#imptxt').value.replace(/^\s*json\s*/i, '')); } catch (e) { alert('El texto no es un JSON válido. Copiá solo la parte que empieza con { y termina con }.'); return; }
+      if (!d || !Array.isArray(d.sesiones)) { alert('No encontré "sesiones" en ese JSON.'); return; }
+      const r = importSessions(d, P());
+      if (!confirm(`Se van a cargar ${r.n} ejercicios de ${r.ses} entrenamientos en ${P().name}${r.skipped.length ? `.\n\nNo encontré en la rutina: ${r.skipped.join(', ')}` : ''}.\n\nSi esas semanas ya tenían datos, se reemplazan. ¿Seguir?`)) return;
+      r.apply(); closeSheet(); S.tab = 'hist'; toast(`Historial importado: ${r.n} ejercicios`); break; }
+    case 'exdone': { const { day, ex } = findEx(k), L = getLog(day, ex, ex.sets); L.done = !L.done; L.skipped = false; stamp(L); buzz(20);
       if (L.done) { stopTimer(k); if (S.cd['rest-' + S.pid]) delete S.cd['rest-' + S.pid]; if (S.open[k]) scrollK = openNext(k); else delete S.open[k]; } break; }
     case 'set': { const { day, ex } = findEx(k), L = getLog(day, ex, ex.sets), i = +el.dataset.i, s = L.sets[i];
       s.done = !s.done; buzz(20);
@@ -975,6 +1166,8 @@ document.addEventListener('change', async ev => {
       cloudPush(); toast(`Ahora se sincronizan los pesos de ${cloudPerson().name}`);
     }
   }
+  if (el.dataset.set === 'showWarm') { S.showWarm = el.checked; save(); }
+  if (el.dataset.file === 'imphist' && el.files[0]) { $('#imptxt').value = await el.files[0].text(); el.value = ''; }
   if (el.dataset.set === 'awake') { S.keepAwake = el.checked; save(); if (!el.checked && WL) { WL.release(); WL = null; } else wake(); }
   if (el.dataset.pname) { const p = prof(el.dataset.pname); p.name = el.value.trim() || p.name; save(); renderPeople(); }
   if (el.dataset.file === 'routine' && el.files[0]) {
@@ -997,7 +1190,10 @@ document.addEventListener('change', async ev => {
 });
 
 document.addEventListener('input', ev => {
-  const el = ev.target; if (!el.dataset.in) return;
+  const el = ev.target;
+  if (el.dataset.note) { const { day, ex } = findEx(el.dataset.note), L = getLog(day, ex, ex.sets); L.note = el.value; if (el.value.trim()) stamp(L); save(); return; }
+  if (el.dataset.dnote) { const day = S.routine.days.find(d => d.id === el.dataset.dnote), g = getLog(day, { id: '_gen' }, 0); g.note = el.value; if (el.value.trim()) stamp(g); save(); return; }
+  if (!el.dataset.in) return;
   const { day, ex } = findEx(el.dataset.k), L = getLog(day, ex, ex.sets);
   L.sets[+el.dataset.i][el.dataset.in] = el.value.trim();
   stamp(L); save();
